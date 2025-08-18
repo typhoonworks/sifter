@@ -78,7 +78,10 @@ docker compose up -d
 # Install dependencies
 mix deps.get
 
-# Run tests (migrations run automatically)
+# Setup test database
+MIX_ENV=test mix ecto.setup
+
+# Run tests
 mix test
 ```
 
@@ -91,15 +94,22 @@ The Docker setup includes:
 If you prefer using your own PostgreSQL:
 
 1. Ensure PostgreSQL is running locally
-2. Update database config in `config/test.exs` if needed
+2. Update database config in `config/config.exs` if needed
 3. Install dependencies: `mix deps.get`
-4. Run tests: `mix test` (migrations run automatically)
+4. Setup test database: `MIX_ENV=test mix ecto.setup`
+5. Run tests: `mix test`
 
 ### Development Commands
 
 ```bash
+# Setup test database (first time or reset)
+MIX_ENV=test mix ecto.setup
+
 # Run tests
 mix test
+
+# Reset database and run fresh migration
+MIX_ENV=test mix ecto.reset
 
 # Format code
 mix format
