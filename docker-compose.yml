@@ -1,0 +1,22 @@
+services:
+  adminer:
+    image: adminer
+    restart: always
+    container_name: sifter_adminer
+    ports:
+      - 8086:8080
+
+  db:
+    image: postgres:15.8
+    restart: always
+    container_name: sifter_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "2345:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+
+volumes:
+  db:
