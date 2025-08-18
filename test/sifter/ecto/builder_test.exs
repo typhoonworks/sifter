@@ -1258,4 +1258,182 @@ defmodule Sifter.BuilderTest do
       assert warning[:path] == "unknown_field"
     end
   end
+
+  describe "date-only for datetime fields" do
+    test "equality with date string creates day boundary range for naive_datetime (inserted_at)" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      start_of_day = NaiveDateTime.new!(target_date, ~T[08:30:00])
+      e1 = insert_event(%{name: "Target event", inserted_at: start_of_day})
+
+      prev_day = NaiveDateTime.new!(Date.add(target_date, -1), ~T[23:59:59])
+      _e2 = insert_event(%{name: "Previous day", inserted_at: prev_day})
+
+      next_day = NaiveDateTime.new!(Date.add(target_date, 1), ~T[00:00:01])
+      _e3 = insert_event(%{name: "Next day", inserted_at: next_day})
+
+      ast = parse!("inserted_at:#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Target event"
+    end
+
+    test "equality with date string creates day boundary range for utc_datetime (time_start)" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      start_of_day = DateTime.new!(target_date, ~T[14:30:00], "Etc/UTC")
+      e1 = insert_event(%{name: "Target event", time_start: start_of_day})
+
+      prev_day = DateTime.new!(Date.add(target_date, -1), ~T[23:59:59], "Etc/UTC")
+      _e2 = insert_event(%{name: "Previous day", time_start: prev_day})
+
+      next_day = DateTime.new!(Date.add(target_date, 1), ~T[00:00:01], "Etc/UTC")
+      _e3 = insert_event(%{name: "Next day", time_start: next_day})
+
+      ast = parse!("time_start:#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Target event"
+    end
+
+    test "greater than or equal with date string for naive_datetime" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      before_date = NaiveDateTime.new!(Date.add(target_date, -1), ~T[23:59:59])
+      _e1 = insert_event(%{name: "Before", inserted_at: before_date})
+
+      on_date = NaiveDateTime.new!(target_date, ~T[08:30:00])
+      e2 = insert_event(%{name: "On date", inserted_at: on_date})
+
+      after_date = NaiveDateTime.new!(Date.add(target_date, 1), ~T[01:00:00])
+      e3 = insert_event(%{name: "After", inserted_at: after_date})
+
+      ast = parse!("inserted_at>=#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 2
+      row_names = Enum.map(rows, & &1.name) |> Enum.sort()
+      assert row_names == ["After", "On date"]
+      row_ids = Enum.map(rows, & &1.id) |> Enum.sort()
+      assert row_ids == Enum.sort([e2.id, e3.id])
+    end
+
+    test "greater than or equal with date string for utc_datetime" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      before_date = DateTime.new!(Date.add(target_date, -1), ~T[23:59:59], "Etc/UTC")
+      _e1 = insert_event(%{name: "Before UTC", time_start: before_date})
+
+      on_date = DateTime.new!(target_date, ~T[08:30:00], "Etc/UTC")
+      e2 = insert_event(%{name: "On date UTC", time_start: on_date})
+
+      after_date = DateTime.new!(Date.add(target_date, 1), ~T[01:00:00], "Etc/UTC")
+      e3 = insert_event(%{name: "After UTC", time_start: after_date})
+
+      ast = parse!("time_start>=#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 2
+      row_names = Enum.map(rows, & &1.name) |> Enum.sort()
+      assert row_names == ["After UTC", "On date UTC"]
+      row_ids = Enum.map(rows, & &1.id) |> Enum.sort()
+      assert row_ids == Enum.sort([e2.id, e3.id])
+    end
+
+    test "less than with date string for naive_datetime" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      before_date = NaiveDateTime.new!(Date.add(target_date, -1), ~T[23:59:59])
+      e1 = insert_event(%{name: "Before", inserted_at: before_date})
+
+      on_date = NaiveDateTime.new!(target_date, ~T[08:30:00])
+      _e2 = insert_event(%{name: "On date", inserted_at: on_date})
+
+      ast = parse!("inserted_at<#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Before"
+    end
+
+    test "less than with date string for utc_datetime" do
+      date_str = "2025-08-07"
+      target_date = ~D[2025-08-07]
+
+      before_date = DateTime.new!(Date.add(target_date, -1), ~T[23:59:59], "Etc/UTC")
+      e1 = insert_event(%{name: "Before UTC", time_start: before_date})
+
+      on_date = DateTime.new!(target_date, ~T[08:30:00], "Etc/UTC")
+      _e2 = insert_event(%{name: "On date UTC", time_start: on_date})
+
+      ast = parse!("time_start<#{date_str}")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Before UTC"
+    end
+
+    test "invalid date string still returns error" do
+      ast = parse!("inserted_at:invalid-date")
+
+      assert {:error, {:builder, :invalid_value}} = Builder.apply(Event, ast, schema: Event)
+    end
+
+    test "regular naive datetime strings still work" do
+      datetime_str = "2025-08-07T10:30:00"
+      target_datetime = ~N[2025-08-07 10:30:00]
+
+      e1 = insert_event(%{name: "Exact naive match", inserted_at: target_datetime})
+      _e2 = insert_event(%{name: "Different naive time", inserted_at: ~N[2025-08-07 11:00:00]})
+
+      ast = parse!("inserted_at:\"#{datetime_str}\"")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Exact naive match"
+    end
+
+    test "regular utc datetime strings still work" do
+      datetime_str = "2025-08-07T10:30:00Z"
+      target_datetime = ~U[2025-08-07 10:30:00Z]
+
+      e1 = insert_event(%{name: "Exact UTC match", time_start: target_datetime})
+      _e2 = insert_event(%{name: "Different UTC time", time_start: ~U[2025-08-07 11:00:00Z]})
+
+      ast = parse!("time_start:\"#{datetime_str}\"")
+
+      assert {:ok, q, _meta} = Builder.apply(Event, ast, schema: Event)
+
+      rows = Repo.all(q)
+      assert length(rows) == 1
+      assert hd(rows).id == e1.id
+      assert hd(rows).name == "Exact UTC match"
+    end
+  end
 end

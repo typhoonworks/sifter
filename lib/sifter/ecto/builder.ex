@@ -348,8 +348,17 @@ defmodule Sifter.Ecto.Builder do
              unknown_field: options.unknown_field,
              original_path: fp
            }),
-         {:ok, casted} <- cast_value(type, op, val) do
-      {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+         cast <- cast_value(type, op, val) do
+      case cast do
+        {:date_only, op, d, datetime_type} ->
+          {:ok, date_only_dyn(binding, field_atom, op, d, datetime_type, shape), @default_meta}
+
+        {:ok, casted} ->
+          {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     else
       {:ignore, warning} ->
         {:ok, nil, Map.put(@default_meta, :warnings, [warning])}
@@ -395,6 +404,93 @@ defmodule Sifter.Ecto.Builder do
   defp cmp_dyn(:root, f, op, v, :with_assoc) do
     root_dyn = cmp_dyn(:root, f, op, v, :root_only)
     dynamic([_root, j], ^root_dyn)
+  end
+
+  defp date_only_dyn(kind, f, op, %Date{} = d, datetime_type, shape) do
+    {start_dt, next_dt} = create_datetime_boundaries(d, datetime_type)
+
+    case {kind, shape, op} do
+      {:root, :root_only, :eq} ->
+        dynamic([root], field(root, ^f) >= ^start_dt and field(root, ^f) < ^next_dt)
+
+      {:root, :root_only, :gte} ->
+        dynamic([root], field(root, ^f) >= ^start_dt)
+
+      {:root, :root_only, :gt} ->
+        dynamic([root], field(root, ^f) >= ^next_dt)
+
+      {:root, :root_only, :lte} ->
+        dynamic([root], field(root, ^f) < ^next_dt)
+
+      {:root, :root_only, :lt} ->
+        dynamic([root], field(root, ^f) < ^start_dt)
+
+      {:root, :with_assoc, :eq} ->
+        dynamic([root, _j], field(root, ^f) >= ^start_dt and field(root, ^f) < ^next_dt)
+
+      {:root, :with_assoc, :gte} ->
+        dynamic([root, _j], field(root, ^f) >= ^start_dt)
+
+      {:root, :with_assoc, :gt} ->
+        dynamic([root, _j], field(root, ^f) >= ^next_dt)
+
+      {:root, :with_assoc, :lte} ->
+        dynamic([root, _j], field(root, ^f) < ^next_dt)
+
+      {:root, :with_assoc, :lt} ->
+        dynamic([root, _j], field(root, ^f) < ^start_dt)
+
+      {:assoc, :with_assoc, :eq} ->
+        dynamic([_root, j], field(j, ^f) >= ^start_dt and field(j, ^f) < ^next_dt)
+
+      {:assoc, :with_assoc, :gte} ->
+        dynamic([_root, j], field(j, ^f) >= ^start_dt)
+
+      {:assoc, :with_assoc, :gt} ->
+        dynamic([_root, j], field(j, ^f) >= ^next_dt)
+
+      {:assoc, :with_assoc, :lte} ->
+        dynamic([_root, j], field(j, ^f) < ^next_dt)
+
+      {:assoc, :with_assoc, :lt} ->
+        dynamic([_root, j], field(j, ^f) < ^start_dt)
+
+      other ->
+        raise ArgumentError, "date-only not supported for #{inspect(other)}"
+    end
+  end
+
+  defp create_datetime_boundaries(%Date{} = d, datetime_type) do
+    case datetime_type do
+      :utc_datetime ->
+        start_dt = DateTime.new!(d, ~T[00:00:00], "Etc/UTC") |> DateTime.truncate(:second)
+
+        next_dt =
+          d |> Date.add(1) |> DateTime.new!(~T[00:00:00], "Etc/UTC") |> DateTime.truncate(:second)
+
+        {start_dt, next_dt}
+
+      :utc_datetime_usec ->
+        start_dt = DateTime.new!(d, ~T[00:00:00.000000], "Etc/UTC")
+        next_dt = d |> Date.add(1) |> DateTime.new!(~T[00:00:00.000000], "Etc/UTC")
+        {start_dt, next_dt}
+
+      :naive_datetime ->
+        start_dt = NaiveDateTime.new!(d, ~T[00:00:00]) |> NaiveDateTime.truncate(:second)
+
+        next_dt =
+          d |> Date.add(1) |> NaiveDateTime.new!(~T[00:00:00]) |> NaiveDateTime.truncate(:second)
+
+        {start_dt, next_dt}
+
+      :naive_datetime_usec ->
+        start_dt = NaiveDateTime.new!(d, ~T[00:00:00.000000])
+        next_dt = d |> Date.add(1) |> NaiveDateTime.new!(~T[00:00:00.000000])
+        {start_dt, next_dt}
+
+      other ->
+        raise ArgumentError, "Unsupported datetime type for date-only: #{inspect(other)}"
+    end
   end
 
   defp build_search(_term, nil, _st, _col, _r, _rel, _shape, _mode),
@@ -639,7 +735,26 @@ defmodule Sifter.Ecto.Builder do
   defp cast_value(_type, op, v) when op in [:starts_with, :ends_with] and is_binary(v),
     do: {:ok, v}
 
-  defp cast_value(type, _op, v) do
+  defp cast_value(type, op, v) do
+    cast_value_with_dateonly(type, op, v)
+  end
+
+  defp cast_value_with_dateonly(type, op, v) do
+    case {type, v} do
+      {t, val}
+      when t in [:utc_datetime, :naive_datetime, :utc_datetime_usec, :naive_datetime_usec] and
+             is_binary(val) ->
+        case Date.from_iso8601(val) do
+          {:ok, d} -> {:date_only, op, d, t}
+          _ -> do_strict_cast(type, val)
+        end
+
+      _ ->
+        do_strict_cast(type, v)
+    end
+  end
+
+  defp do_strict_cast(type, v) do
     case Ecto.Type.cast(type, v) do
       {:ok, casted} -> {:ok, casted}
       :error -> {:error, :invalid_value}
