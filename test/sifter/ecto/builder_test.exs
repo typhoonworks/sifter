@@ -477,7 +477,7 @@ defmodule Sifter.BuilderTest do
     end
   end
 
-  describe "set operations (IN / NOT IN)" do
+  describe "set operations (IN / NOT IN / ALL)" do
     setup do
       e1 = insert_event(%{status: "live"})
       e2 = insert_event(%{status: "draft"})
@@ -565,6 +565,101 @@ defmodule Sifter.BuilderTest do
       rows = Repo.all(q)
       ids = Enum.map(rows, & &1.id) |> Enum.sort()
       assert ids == Enum.sort([e1.id, e2.id])
+    end
+
+    test "ALL with root scalar field (degraded to IN with warning)" do
+      unique_name = "test_unique_#{System.unique_integer([:positive])}"
+      e1 = insert_event(%{status: "live", name: unique_name <> "_1"})
+      e2 = insert_event(%{status: "draft", name: unique_name <> "_2"})
+      _e3 = insert_event(%{status: "building", name: unique_name <> "_3"})
+
+      ast = parse!("status ALL ('live', 'draft') AND name:#{unique_name}*")
+
+      assert {:ok, q, meta} = Builder.apply(Event, ast, schema: Event, search_fields: [])
+      rows = Repo.all(q)
+      ids = Enum.map(rows, & &1.id) |> Enum.sort()
+      assert ids == Enum.sort([e1.id, e2.id])
+
+      assert [warning] = meta.warnings
+      assert warning.type == :degraded_contains_all
+      assert warning.field == "status"
+      assert warning.op_used == :in
+
+      {sql, params} = to_sql!(q)
+      assert sql =~ "ANY" or sql =~ "IN"
+
+      assert Enum.any?(params, fn p ->
+               (is_list(p) and "live" in p and "draft" in p) or
+                 (is_binary(p) and p in ["live", "draft"])
+             end)
+    end
+
+    test "ALL with root array field (true contains_all semantics)" do
+      e1 = insert_event(%{labels: ["backend", "urgent", "api"]})
+      _e2 = insert_event(%{labels: ["frontend", "urgent"]})
+      _e3 = insert_event(%{labels: ["backend", "low-priority"]})
+
+      ast = parse!("labels ALL ('backend', 'urgent')")
+
+      assert {:ok, q, meta} = Builder.apply(Event, ast, schema: Event, search_fields: [])
+      rows = Repo.all(q)
+      # Only e1 has both "backend" and "urgent"
+      assert rows == [e1]
+
+      assert meta.warnings == []
+
+      {sql, _params} = to_sql!(q)
+      assert sql =~ "@>"
+    end
+
+    test "ALL with assoc field (GROUP BY / HAVING semantics)" do
+      backend_tag = insert_tag(%{name: "backend"})
+      urgent_tag = insert_tag(%{name: "urgent"})
+      frontend_tag = insert_tag(%{name: "frontend"})
+
+      e1 = insert_event(%{name: "Event 1"})
+      e2 = insert_event(%{name: "Event 2"})
+      e3 = insert_event(%{name: "Event 3"})
+
+      insert_event_tag(%{event_id: e1.id, tag_id: backend_tag.id})
+      insert_event_tag(%{event_id: e1.id, tag_id: urgent_tag.id})
+
+      insert_event_tag(%{event_id: e2.id, tag_id: backend_tag.id})
+
+      insert_event_tag(%{event_id: e3.id, tag_id: backend_tag.id})
+      insert_event_tag(%{event_id: e3.id, tag_id: urgent_tag.id})
+      insert_event_tag(%{event_id: e3.id, tag_id: frontend_tag.id})
+
+      ast = parse!("tags.name ALL ('backend', 'urgent')")
+
+      assert {:ok, q, meta} = Builder.apply(Event, ast, schema: Event, search_fields: [])
+      rows = Repo.all(q)
+      ids = Enum.map(rows, & &1.id) |> Enum.sort()
+      # Both e1 and e3 have both required tags
+      assert ids == Enum.sort([e1.id, e3.id])
+
+      assert meta.warnings == []
+
+      {sql, _params} = to_sql!(q)
+      assert sql =~ "JOIN"
+      assert sql =~ "GROUP BY"
+      assert sql =~ "HAVING"
+      assert sql =~ "count"
+    end
+
+    test "ALL with single value (edge case)" do
+      unique_name = "single_test_#{System.unique_integer([:positive])}"
+      e1 = insert_event(%{status: "live", name: unique_name})
+      _e2 = insert_event(%{status: "draft", name: unique_name <> "_other"})
+
+      ast = parse!("status ALL ('live') AND name:#{unique_name}")
+
+      assert {:ok, q, meta} = Builder.apply(Event, ast, schema: Event, search_fields: [])
+      rows = Repo.all(q)
+      assert rows == [e1]
+
+      assert [warning] = meta.warnings
+      assert warning.type == :degraded_contains_all
     end
   end
 

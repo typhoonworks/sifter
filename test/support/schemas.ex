@@ -42,6 +42,7 @@ defmodule Sifter.Test.Schemas.Event do
     field(:active, :boolean, default: true)
     field(:time_start, :utc_datetime)
     field(:time_end, :utc_datetime)
+    field(:labels, {:array, :string}, default: [])
     belongs_to(:organization, Sifter.Test.Schemas.Organization)
 
     many_to_many(:tags, Sifter.Test.Schemas.Tag,

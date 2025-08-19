@@ -14,7 +14,7 @@ defmodule Sifter.Ecto.Builder do
   - **Equality**: `:eq` (`:`) - Exact match or wildcard patterns
   - **Inequality**: `:neq` - Not equal comparison
   - **Relational**: `:gt` (`>`), `:gte` (`>=`), `:lt` (`<`), `:lte` (`<=`) - Numeric/date comparisons
-  - **Set operations**: `:in`, `:nin` - Membership testing with lists
+  - **Set operations**: `:in`, `:nin`, `:contains_all` - Membership testing with lists
   - **String matching**: `:starts_with` (`prefix*`), `:ends_with` (`*suffix`) - Pattern matching
 
   ## Field Path Resolution
@@ -63,14 +63,16 @@ defmodule Sifter.Ecto.Builder do
           uses_full_text?: boolean(),
           added_select_fields: [atom()],
           recommended_order: [{atom(), :asc | :desc}] | nil,
-          warnings: [map()] | nil
+          warnings: [map()] | nil,
+          assoc_contains_all: [map()] | nil
         }
 
   @default_meta %{
     uses_full_text?: false,
     added_select_fields: [],
     recommended_order: nil,
-    warnings: []
+    warnings: [],
+    assoc_contains_all: []
   }
 
   @spec apply(Ecto.Queryable.t(), AST.t(), keyword()) ::
@@ -127,8 +129,10 @@ defmodule Sifter.Ecto.Builder do
             :with_assoc -> where(query1, [root, j], ^dyn)
           end
 
-        q2 = if many?, do: distinct(q2, true), else: q2
-        {:ok, q2, meta}
+        q3 = apply_assoc_contains_all_aggregation(q2, meta, shape)
+
+        q3 = if many?, do: distinct(q3, true), else: q3
+        {:ok, q3, meta}
 
       {:error, reason} ->
         {:error, {:builder, reason}}
@@ -327,8 +331,108 @@ defmodule Sifter.Ecto.Builder do
       uses_full_text?: a.uses_full_text? or b.uses_full_text?,
       added_select_fields: Enum.uniq(a.added_select_fields ++ b.added_select_fields),
       recommended_order: b.recommended_order || a.recommended_order,
-      warnings: (a[:warnings] || []) ++ (b[:warnings] || [])
+      warnings: (a[:warnings] || []) ++ (b[:warnings] || []),
+      assoc_contains_all: (a[:assoc_contains_all] || []) ++ (b[:assoc_contains_all] || [])
     }
+  end
+
+  defp handle_contains_all(:contains_all, binding, field_atom, type, casted, shape, resolved_fp) do
+    case {binding, type, shape} do
+      {:root, {:array, inner}, shape} ->
+        dyn = contains_all_array_dyn(:root, field_atom, casted, inner, shape)
+        {:contains_all_handled, {:ok, dyn, @default_meta}}
+
+      {:assoc, _type, :with_assoc} ->
+        dyn = dynamic([_root, j], field(j, ^field_atom) in ^casted)
+        unique_count = length(Enum.uniq(casted))
+
+        meta = %{
+          @default_meta
+          | assoc_contains_all: [%{field_atom: field_atom, count: unique_count}]
+        }
+
+        {:contains_all_handled, {:ok, dyn, meta}}
+
+      {:root, _not_array, shape} ->
+        dyn =
+          case shape do
+            :root_only -> dynamic([root], field(root, ^field_atom) in ^casted)
+            :with_assoc -> dynamic([root, _j], field(root, ^field_atom) in ^casted)
+          end
+
+        warning = %{
+          type: :degraded_contains_all,
+          field: Enum.join(resolved_fp, "."),
+          op_used: :in
+        }
+
+        meta = Map.update!(@default_meta, :warnings, &[warning | &1])
+        {:contains_all_handled, {:ok, dyn, meta}}
+    end
+  end
+
+  defp handle_contains_all(_op, _binding, _field_atom, _type, _casted, _shape, _resolved_fp) do
+    :not_contains_all
+  end
+
+  defp contains_all_array_dyn(:root, field_atom, casted, _inner, :root_only) do
+    dynamic([root], fragment("? @> ?::text[]", field(root, ^field_atom), ^casted))
+  end
+
+  defp contains_all_array_dyn(:root, field_atom, casted, _inner, :with_assoc) do
+    dynamic([root, _j], fragment("? @> ?::text[]", field(root, ^field_atom), ^casted))
+  end
+
+  defp apply_assoc_contains_all_aggregation(query, meta, shape) do
+    assoc_contains_all = meta[:assoc_contains_all] || []
+
+    if Enum.empty?(assoc_contains_all) do
+      query
+    else
+      case shape do
+        :with_assoc ->
+          root_pk = get_primary_key_field(query)
+
+          having_conditions =
+            Enum.map(assoc_contains_all, fn %{field_atom: field_atom, count: count} ->
+              dynamic([_root, j], count(field(j, ^field_atom), :distinct) == ^count)
+            end)
+
+          combined_having =
+            case having_conditions do
+              [] ->
+                nil
+
+              [single] ->
+                single
+
+              multiple ->
+                Enum.reduce(multiple, fn having, acc ->
+                  dynamic([root, j], ^acc and ^having)
+                end)
+            end
+
+          query
+          |> group_by([root, _j], field(root, ^root_pk))
+          |> having([_root, j], ^combined_having)
+
+        :root_only ->
+          query
+      end
+    end
+  end
+
+  defp get_primary_key_field(query) do
+    case query.from do
+      %{source: {_table, schema}} when is_atom(schema) ->
+        case schema.__schema__(:primary_key) do
+          [pk | _] -> pk
+          [] -> :id
+        end
+
+      _ ->
+        :id
+    end
   end
 
   defp build_cmp(
@@ -354,7 +458,13 @@ defmodule Sifter.Ecto.Builder do
           {:ok, date_only_dyn(binding, field_atom, op, d, datetime_type, shape), @default_meta}
 
         {:ok, casted} ->
-          {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+          case handle_contains_all(op, binding, field_atom, type, casted, shape, resolved_fp) do
+            {:contains_all_handled, result} ->
+              result
+
+            :not_contains_all ->
+              {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+          end
 
         {:error, reason} ->
           {:error, reason}
@@ -728,6 +838,14 @@ defmodule Sifter.Ecto.Builder do
   end
 
   defp handle_unknown_field(_path, _), do: :ignore
+
+  defp cast_value({:array, inner}, :contains_all, list) when is_list(list) do
+    cast_list(inner, list)
+  end
+
+  defp cast_value(type, :contains_all, list) when is_list(list) do
+    cast_list(type, list)
+  end
 
   defp cast_value(type, :in, list) when is_list(list), do: cast_list(type, list)
   defp cast_value(type, :nin, list) when is_list(list), do: cast_list(type, list)

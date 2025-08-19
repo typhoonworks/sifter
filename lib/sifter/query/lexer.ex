@@ -24,7 +24,7 @@ defmodule Sifter.Query.Lexer do
 
   ColonOp       = ":" | "<" | "<=" | ">" | ">=" ;
 
-  SetOp         = whitespace , "IN" , whitespace | whitespace , "NOT" , whitespace , "IN" , whitespace ;   (* case-insensitive *)
+  SetOp         = whitespace , "IN" , whitespace | whitespace , "NOT" , whitespace , "IN" , whitespace | whitespace , "ALL" , whitespace ;   (* case-insensitive *)
 
   Field         = Name , { "." , Name } ;      (* dot paths, e.g. tags.name, project.client.name *)
 
@@ -112,6 +112,7 @@ defmodule Sifter.Query.Lexer do
           | {:GREATER_THAN_OR_EQUAL_TO_COMPARATOR, binary(), nil, loc}
           | {:SET_IN, binary(), atom(), loc}
           | {:SET_NOT_IN, binary(), atom(), loc}
+          | {:SET_CONTAINS_ALL, binary(), atom(), loc}
           | {:AND_CONNECTOR, binary(), binary(), loc}
           | {:OR_CONNECTOR, binary(), binary(), loc}
           | {:LEFT_PAREN, binary(), nil, loc}
@@ -466,6 +467,20 @@ defmodule Sifter.Query.Lexer do
                  prev_term?: false
              }}
 
+          {:contains_all, all_off, rest_after_all} ->
+            field_tok = emit_field(st, start_off, field_len)
+            all_lexeme = binary_part(src, all_off, 3)
+            all_tok = tok(:SET_CONTAINS_ALL, all_lexeme, :contains_all, all_off, 3)
+
+            {:ok,
+             %{
+               st
+               | rest: rest_after_all,
+                 off: all_off + 3,
+                 acc: [all_tok, field_tok | acc],
+                 prev_term?: false
+             }}
+
           {:error, err} ->
             {:error, err}
 
@@ -501,6 +516,19 @@ defmodule Sifter.Query.Lexer do
 
               _ ->
                 {:error, {:invalid_predicate_spacing, nil, {off1 + 6, 1}}}
+            end
+
+          <<c1, c2, c3, rest2::binary>>
+          when (c1 == ?A or c1 == ?a) and (c2 == ?L or c2 == ?l) and (c3 == ?L or c3 == ?l) ->
+            case rest2 do
+              <<c4, _::binary>> when is_name_cont(c4) ->
+                :none
+
+              <<c4, _::binary>> when is_ws(c4) ->
+                {:contains_all, off1, rest2}
+
+              _ ->
+                {:error, {:invalid_predicate_spacing, nil, {off1 + 3, 1}}}
             end
 
           <<c1, c2, rest2::binary>>

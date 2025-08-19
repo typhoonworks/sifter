@@ -10,7 +10,7 @@ defmodule Sifter.Query.Parser do
   - **Operator precedence**: Handles correct precedence with `AND` (precedence 20) binding tighter than `OR` (precedence 10)
   - **Boolean logic**: Supports `AND`, `OR`, and `NOT` operators with proper associativity
   - **Field predicates**: Parses field-based comparisons with various operators (`:`, `<`, `<=`, `>`, `>=`)
-  - **Set operations**: Handles `IN` and `NOT IN` operations with list validation
+  - **Set operations**: Handles `IN`, `NOT IN`, and `ALL` operations with list validation
   - **Wildcard support**: Processes prefix/suffix wildcards (`field:prefix*`, `field:*suffix`) for equality operations
   - **Grouping**: Supports parentheses for explicit precedence control
   - **Full-text search**: Handles bare terms as full-text search expressions
@@ -38,7 +38,7 @@ defmodule Sifter.Query.Parser do
 
   Wildcards are **not allowed** in:
   - Relational comparisons (`<`, `<=`, `>`, `>=`)
-  - Set operations (`IN`, `NOT IN`) unless quoted
+  - Set operations (`IN`, `NOT IN`, `ALL`) unless quoted
 
   ## Error Handling
 
@@ -340,6 +340,7 @@ defmodule Sifter.Query.Parser do
       case cmp do
         {:SET_IN, _, _, _} = set -> parse_set_list(st1, field_lit, set, :in)
         {:SET_NOT_IN, _, _, _} = set -> parse_set_list(st1, field_lit, set, :nin)
+        {:SET_CONTAINS_ALL, _, _, _} = set -> parse_set_list(st1, field_lit, set, :contains_all)
         other -> {:error, {:unexpected_token, other}}
       end
     end

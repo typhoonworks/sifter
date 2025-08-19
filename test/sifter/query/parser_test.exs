@@ -10,6 +10,7 @@ defmodule Sifter.Query.ParserTest do
   defp gte(path, v), do: %AST.Cmp{field_path: path, op: :gte, value: v}
   defp inn(path, vs), do: %AST.Cmp{field_path: path, op: :in, value: vs}
   defp nin(path, vs), do: %AST.Cmp{field_path: path, op: :nin, value: vs}
+  defp contains_all(path, vs), do: %AST.Cmp{field_path: path, op: :contains_all, value: vs}
 
   describe "simple inputs" do
     test "single EOF token" do
@@ -261,6 +262,22 @@ defmodule Sifter.Query.ParserTest do
                {:ok, nin(["status"], ["live", "draft"])}
     end
 
+    test "ALL with quoted list" do
+      tokens = [
+        {:FIELD_IDENTIFIER, "tags.name", "tags.name", {0, 0}},
+        {:SET_CONTAINS_ALL, "ALL", :contains_all, {0, 0}},
+        {:LEFT_PAREN, "(", nil, {0, 0}},
+        {:STRING_VALUE, "'backend'", "backend", {0, 0}},
+        {:COMMA, ",", nil, {0, 0}},
+        {:STRING_VALUE, "'urgent'", "urgent", {0, 0}},
+        {:RIGHT_PAREN, ")", nil, {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Parser.parse(tokens) ==
+               {:ok, contains_all(["tags", "name"], ["backend", "urgent"])}
+    end
+
     test "error: IN without a list" do
       tokens = [
         {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
@@ -391,7 +408,7 @@ defmodule Sifter.Query.ParserTest do
                Parser.parse(tokens)
     end
 
-    test "IN / NOT IN must be followed by a list" do
+    test "IN / NOT IN / ALL must be followed by a list" do
       tokens = [
         {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
         {:SET_IN, "IN", :in, {0, 0}},
@@ -411,6 +428,18 @@ defmodule Sifter.Query.ParserTest do
 
       assert {:error,
               {:expected_list_after_set_operator, {:SET_NOT_IN, "NOT IN", :not_in, {0, 0}}}} =
+               Parser.parse(tokens)
+
+      tokens = [
+        {:FIELD_IDENTIFIER, "tags.name", "tags.name", {0, 0}},
+        {:SET_CONTAINS_ALL, "ALL", :contains_all, {0, 0}},
+        {:STRING_VALUE, "'backend'", "backend", {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert {:error,
+              {:expected_list_after_set_operator,
+               {:SET_CONTAINS_ALL, "ALL", :contains_all, {0, 0}}}} =
                Parser.parse(tokens)
     end
 

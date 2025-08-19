@@ -160,8 +160,8 @@ The following options are planned for future implementation:
 - `:error` - Return error when limit exceeded
 - `:ignore` - Silently ignore additional joins
 
-**`empty_in`** - How to handle empty IN/NOT IN lists *(to be implemented)*
-- `false` - Allow empty lists (results in no matches for IN, all matches for NOT IN)
+**`empty_in`** - How to handle empty IN/NOT IN/ALL lists *(to be implemented)*
+- `false` - Allow empty lists (results in no matches for IN, all matches for NOT IN/ALL)
 - `true` - Allow and optimize empty lists
 - `:error` - Return error on empty lists
 

@@ -3,7 +3,18 @@ defmodule Sifter.AST do
   Semantic AST for filters. Both the string and JSON front-ends should build these nodes.
   """
 
-  @type op :: :eq | :neq | :gt | :gte | :lt | :lte | :in | :nin | :starts_with | :ends_with
+  @type op ::
+          :eq
+          | :neq
+          | :gt
+          | :gte
+          | :lt
+          | :lte
+          | :in
+          | :nin
+          | :contains_all
+          | :starts_with
+          | :ends_with
   @type field_path :: [String.t()]
 
   @type t ::

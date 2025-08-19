@@ -34,7 +34,7 @@ defmodule Sifter do
 
   - **Field predicates**: `status:published`, `priority>5`, `createdAt<='2024-01-01'`
   - **Boolean logic**: `status:draft OR status:review`, `published AND priority>3`
-  - **Lists**: `status IN (draft, published)`, `tag NOT IN (spam, test)`
+  - **Lists**: `status IN (draft, published)`, `tag NOT IN (spam, test)`, `labels ALL (urgent, backend)`
   - **Wildcards**: `title:data*`, `email:*@example.com`
   - **Full-text search**: Any unqualified terms search configured text fields
 

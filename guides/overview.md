@@ -66,7 +66,7 @@ Sifter is built specifically for PostgreSQL applications and provides:
 Support for all standard comparison operations:
 - **Equality**: `status:published`
 - **Comparison**: `priority:>5`, `created_at:<=2024-01-01`
-- **Set membership**: `category IN (news, blog)`, `type NOT IN (archived)`
+- **Set membership**: `category IN (news, blog)`, `type NOT IN (archived)`, `labels ALL (urgent, backend)`
 - **Wildcards**: `title:acme*` (starts with), `title:*corp` (ends with)
 
 ### Boolean Logic

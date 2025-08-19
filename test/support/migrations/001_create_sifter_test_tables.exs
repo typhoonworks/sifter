@@ -18,6 +18,7 @@ defmodule Sifter.Test.Repo.Migrations.CreateSifterTestTables do
       add(:active, :boolean, default: true)
       add(:time_start, :utc_datetime)
       add(:time_end, :utc_datetime)
+      add(:labels, {:array, :text}, default: [])
       add(:organization_id, references(:organizations), null: true)
       timestamps()
     end

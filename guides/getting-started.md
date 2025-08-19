@@ -126,7 +126,7 @@ Exclude records with NOT:
 
 ## Set Operations
 
-### IN and NOT IN
+### IN, NOT IN, and ALL
 
 Filter by multiple values:
 
@@ -138,6 +138,19 @@ Filter by multiple values:
 
 # Exclude multiple statuses
 {query, meta} = Sifter.filter!(Post, "status NOT IN (archived, deleted)",
+  schema: Post
+)
+
+# Posts that contain ALL specified values
+{query, meta} = Sifter.filter!(Post, "labels ALL (urgent, backend)",      # Array field
+  schema: Post
+)
+
+{query, meta} = Sifter.filter!(Post, "tags.name ALL (urgent, backend)",  # Association
+  schema: Post
+)
+
+{query, meta} = Sifter.filter!(Post, "status ALL (published)",           # Scalar (with warning)
   schema: Post
 )
 ```

@@ -988,6 +988,51 @@ defmodule Sifter.Query.LexerTest do
                   {:EOF, "", nil, {12, 0}}
                 ]}
     end
+
+    test "ALL with quoted list" do
+      assert {:ok, toks} = Lexer.tokenize("tags.name ALL ('backend','urgent')")
+
+      assert [
+               {:FIELD_IDENTIFIER, "tags.name", "tags.name", {0, 9}},
+               {:SET_CONTAINS_ALL, all_lex, :contains_all, {10, 3}},
+               {:LEFT_PAREN, "(", nil, {14, 1}},
+               {:STRING_VALUE, "'backend'", "backend", {15, 9}},
+               {:COMMA, ",", nil, {24, 1}},
+               {:STRING_VALUE, "'urgent'", "urgent", {25, 8}},
+               {:RIGHT_PAREN, ")", nil, {33, 1}},
+               {:EOF, "", nil, {34, 0}}
+             ] = toks
+
+      assert String.upcase(all_lex) == "ALL"
+    end
+
+    test "ALL case-insensitive with flexible whitespace" do
+      assert {:ok, toks} = Lexer.tokenize("tags.name  all  ('backend', 'urgent')")
+
+      assert [
+               {:FIELD_IDENTIFIER, "tags.name", "tags.name", {0, 9}},
+               {:SET_CONTAINS_ALL, all_lex, :contains_all, {11, 3}},
+               {:LEFT_PAREN, "(", nil, {16, 1}},
+               {:STRING_VALUE, "'backend'", "backend", {17, 9}},
+               {:COMMA, ",", nil, {26, 1}},
+               {:STRING_VALUE, "'urgent'", "urgent", {28, 8}},
+               {:RIGHT_PAREN, ")", nil, {36, 1}},
+               {:EOF, "", nil, {37, 0}}
+             ] = toks
+
+      assert String.upcase(all_lex) == "ALL"
+    end
+
+    test "field followed by bare word starting with 'all' is not a set op" do
+      assert Lexer.tokenize("status allowed") ==
+               {:ok,
+                [
+                  {:STRING_VALUE, "status", "status", {0, 6}},
+                  {:AND_CONNECTOR, " ", "and", {6, 1}},
+                  {:STRING_VALUE, "allowed", "allowed", {7, 7}},
+                  {:EOF, "", nil, {14, 0}}
+                ]}
+    end
   end
 
   describe "errors" do
