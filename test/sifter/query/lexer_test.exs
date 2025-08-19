@@ -396,78 +396,6 @@ defmodule Sifter.Query.LexerTest do
     end
   end
 
-  describe "wildcard patterns" do
-    test "prefix wildcard (starts_with) with simple field" do
-      assert Lexer.tokenize("name:Bea*") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
-                  {:STRING_VALUE, "Bea*", "Bea*", {5, 4}},
-                  {:EOF, "", nil, {9, 0}}
-                ]}
-    end
-
-    test "suffix wildcard (ends_with) with simple field" do
-      assert Lexer.tokenize("name:*Inc") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
-                  {:STRING_VALUE, "*Inc", "*Inc", {5, 4}},
-                  {:EOF, "", nil, {9, 0}}
-                ]}
-    end
-
-    test "prefix wildcard with dotted path" do
-      assert Lexer.tokenize("organization.name:Bea*") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {0, 17}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {17, 1}},
-                  {:STRING_VALUE, "Bea*", "Bea*", {18, 4}},
-                  {:EOF, "", nil, {22, 0}}
-                ]}
-    end
-
-    test "suffix wildcard with dotted path" do
-      assert Lexer.tokenize("organization.name:*Inc") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {0, 17}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {17, 1}},
-                  {:STRING_VALUE, "*Inc", "*Inc", {18, 4}},
-                  {:EOF, "", nil, {22, 0}}
-                ]}
-    end
-
-    test "wildcards in compound queries" do
-      assert Lexer.tokenize("status:live AND organization.name:Bea*") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
-                  {:STRING_VALUE, "live", "live", {7, 4}},
-                  {:AND_CONNECTOR, "AND", "and", {12, 3}},
-                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {16, 17}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {33, 1}},
-                  {:STRING_VALUE, "Bea*", "Bea*", {34, 4}},
-                  {:EOF, "", nil, {38, 0}}
-                ]}
-    end
-
-    test "quoted wildcard is treated as literal" do
-      assert Lexer.tokenize("name:'Bea*'") ==
-               {:ok,
-                [
-                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
-                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
-                  {:STRING_VALUE, "'Bea*'", "Bea*", {5, 6}},
-                  {:EOF, "", nil, {11, 0}}
-                ]}
-    end
-  end
-
   describe "greater than comparator terms" do
     test "field in snake_case" do
       assert Lexer.tokenize("max_price>10") ==
@@ -594,6 +522,78 @@ defmodule Sifter.Query.LexerTest do
                   {:LESS_THAN_COMPARATOR, "<", nil, {29, 1}},
                   {:STRING_VALUE, "'2021-11-11'", "2021-11-11", {30, 12}},
                   {:EOF, "", nil, {42, 0}}
+                ]}
+    end
+  end
+
+  describe "wildcard patterns" do
+    test "prefix wildcard (starts_with) with simple field" do
+      assert Lexer.tokenize("name:Bea*") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
+                  {:STRING_VALUE, "Bea*", "Bea*", {5, 4}},
+                  {:EOF, "", nil, {9, 0}}
+                ]}
+    end
+
+    test "suffix wildcard (ends_with) with simple field" do
+      assert Lexer.tokenize("name:*Inc") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
+                  {:STRING_VALUE, "*Inc", "*Inc", {5, 4}},
+                  {:EOF, "", nil, {9, 0}}
+                ]}
+    end
+
+    test "prefix wildcard with dotted path" do
+      assert Lexer.tokenize("organization.name:Bea*") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {0, 17}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {17, 1}},
+                  {:STRING_VALUE, "Bea*", "Bea*", {18, 4}},
+                  {:EOF, "", nil, {22, 0}}
+                ]}
+    end
+
+    test "suffix wildcard with dotted path" do
+      assert Lexer.tokenize("organization.name:*Inc") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {0, 17}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {17, 1}},
+                  {:STRING_VALUE, "*Inc", "*Inc", {18, 4}},
+                  {:EOF, "", nil, {22, 0}}
+                ]}
+    end
+
+    test "wildcards in compound queries" do
+      assert Lexer.tokenize("status:live AND organization.name:Bea*") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
+                  {:STRING_VALUE, "live", "live", {7, 4}},
+                  {:AND_CONNECTOR, "AND", "and", {12, 3}},
+                  {:FIELD_IDENTIFIER, "organization.name", "organization.name", {16, 17}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {33, 1}},
+                  {:STRING_VALUE, "Bea*", "Bea*", {34, 4}},
+                  {:EOF, "", nil, {38, 0}}
+                ]}
+    end
+
+    test "quoted wildcard is treated as literal" do
+      assert Lexer.tokenize("name:'Bea*'") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "name", "name", {0, 4}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {4, 1}},
+                  {:STRING_VALUE, "'Bea*'", "Bea*", {5, 6}},
+                  {:EOF, "", nil, {11, 0}}
                 ]}
     end
   end

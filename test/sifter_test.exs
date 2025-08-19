@@ -12,7 +12,6 @@ defmodule SifterTest do
     end
 
     test "complex query with ranges, IN operations, wildcards and full-text search", %{
-      events: %{e1: _e1, e2: _e2, e3: _e3, e4: _e4},
       orgs: %{beatz: beatz, donutz: donutz}
     } do
       now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -55,8 +54,7 @@ defmodule SifterTest do
     end
 
     test "complex query with NOT and nested associations", %{
-      events: %{e1: _e1, e4: e4},
-      tags: %{music: _music_tag}
+      events: %{e4: e4}
     } do
       query = "NOT status:draft AND tags.name:music"
 
@@ -71,6 +69,43 @@ defmodule SifterTest do
       _expected_ids = [e4.id] |> Enum.sort()
 
       assert length(results) >= 1
+      assert meta.uses_full_text? == false
+    end
+
+    test "complex query with NULL sentinel", %{
+      events: %{e4: e4, e5: e5},
+      tags: %{live: live_tag, music: music_tag, family: family_tag}
+    } do
+      orphan =
+        insert_event(%{
+          name: "Orphan Event",
+          status: "live"
+        })
+
+      query =
+        """
+        organization IN (NULL, #{e5.organization_id})
+        OR
+        tag ALL (#{live_tag.name}, #{music_tag.name}, #{family_tag.name})
+        """
+        |> String.trim()
+
+      filters = [
+        %{as: "organization", field: "organization_id"},
+        %{as: "tag", field: "tags.name"}
+      ]
+
+      assert {:ok, ecto_query, meta} =
+               Sifter.filter(Event, query, allowed_fields: filters)
+
+      results = Repo.all(ecto_query)
+      result_ids = Enum.map(results, & &1.id) |> Enum.sort()
+      expected_ids = [orphan.id, e4.id, e5.id] |> Enum.sort()
+
+      # orphan matches because organization_id is NULL
+      # e4 matches because it has all the required tags
+      # e5 matches because its organization_id is explicitly in the list
+      assert result_ids == expected_ids
       assert meta.uses_full_text? == false
     end
 

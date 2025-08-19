@@ -415,7 +415,14 @@ defmodule Sifter.Query.Parser do
         if not quoted_lexeme?(vlex) and wildcard_in?(vlex) do
           {:error, {:wildcard_not_allowed_in_list, tok}}
         else
-          {:ok, {{vlex, vlit}, advance(st)}}
+          val =
+            if !quoted_lexeme?(vlex) and String.downcase(vlex) == "null" do
+              nil
+            else
+              vlit
+            end
+
+          {:ok, {{vlex, val}, advance(st)}}
         end
 
       other ->
@@ -448,6 +455,9 @@ defmodule Sifter.Query.Parser do
 
   defp classify_colon_value(vtok = {:STRING_VALUE, vlex, vlit, _loc}, allow_wildcard?) do
     cond do
+      !quoted_lexeme?(vlex) and String.downcase(vlex) == "null" ->
+        {nil, nil}
+
       quoted_lexeme?(vlex) or not allow_wildcard? ->
         {nil, vlit}
 
