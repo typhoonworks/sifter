@@ -14,17 +14,17 @@ defmodule Sifter.Query.Lexer do
   ```ebnf
   Query         = [ whitespace ] , [ Term , { ( whitespace , Connective , whitespace | whitespace ) , Term } ] , [ whitespace ] ;
 
-  Connective    = "AND" | "OR" ;           (* case-insensitive; AND has higher precedence than OR *)
+  Connective    = "AND" | "OR" ;           (* AND has higher precedence than OR *)
 
   Term          = [ Modifier ] , ( "(" , [ whitespace ] , Query , [ whitespace ] , ")" | Predicate | FullText ) ;
 
-  Modifier      = "-" | "NOT" , whitespace ;          (* case-insensitive; "-" has no following space *)
+  Modifier      = "-" | "NOT" , whitespace ;          (* "-" has no following space *)
 
   Predicate     = Field , ( ColonOp , ValueOrList | SetOp , List ) ;
 
   ColonOp       = ":" | "<" | "<=" | ">" | ">=" ;
 
-  SetOp         = whitespace , "IN" , whitespace | whitespace , "NOT" , whitespace , "IN" , whitespace | whitespace , "ALL" , whitespace ;   (* case-insensitive *)
+  SetOp         = whitespace , "IN" , whitespace | whitespace , "NOT" , whitespace , "IN" , whitespace | whitespace , "ALL" , whitespace ;
 
   Field         = Name , { "." , Name } ;      (* dot paths, e.g. tags.name, project.client.name *)
 
@@ -35,10 +35,11 @@ defmodule Sifter.Query.Lexer do
      field:value*  → starts_with match
      field:*value  → ends_with match
      Note: No middle wildcards like *value* - use FullText for contains-across-fields *)
-  Value         = PrefixValue | SuffixValue | ScalarValue ;
+  Value         = PrefixValue | SuffixValue | ScalarValue | NullValue ;
   PrefixValue   = ScalarNoStar , "*" ;                       (* starts_with *)
   SuffixValue   = "*" , ScalarNoStar ;                       (* ends_with *)
   ScalarValue   = Quoted | BareNoStar ;
+  NullValue     = NULL
 
   (* Bare terms perform FullText search across configured fields *)
   FullText      = Quoted | Bare ;
@@ -61,7 +62,7 @@ defmodule Sifter.Query.Lexer do
   ## Behavior Notes
 
   - **Implied AND**: Missing connectives between terms default to AND operation
-  - **Case-insensitive keywords**: `AND`, `OR`, `NOT`, `IN` are case-insensitive
+  - **Case-sensitive keywords**: `AND`, `OR`, `NOT`, `IN`, `ALL`, `NULL` are case-sensitive (must be uppercase)
   - **Bare text search**: Unfielded terms perform "contains" search across configured fields
   - **Wildcard constraints**: Prefix/suffix wildcards (`*`) only work in fielded values
   - **Forward progress**: Every tokenization step consumes ≥1 byte or returns an error
@@ -233,20 +234,18 @@ defmodule Sifter.Query.Lexer do
 
   defp explicit_connector_ahead?(<<c1, rest::binary>>) when is_name_start(c1) do
     case {c1, rest} do
-      {c, <<c2>>} when (c == ?O or c == ?o) and (c2 == ?R or c2 == ?r) ->
+      {?O, <<?R>>} ->
         true
 
-      {c, <<c2, c3, _::binary>>}
-      when (c == ?O or c == ?o) and (c2 == ?R or c2 == ?r) and (is_ws(c3) or c3 in [?), ?(, ?,]) ->
+      {?O, <<?R, c3, _::binary>>}
+      when is_ws(c3) or c3 in [?), ?(, ?,] ->
         true
 
-      {c, <<c2, c3>>}
-      when (c == ?A or c == ?a) and (c2 == ?N or c2 == ?n) and (c3 == ?D or c3 == ?d) ->
+      {?A, <<?N, ?D>>} ->
         true
 
-      {c, <<c2, c3, c4, _::binary>>}
-      when (c == ?A or c == ?a) and (c2 == ?N or c2 == ?n) and (c3 == ?D or c3 == ?d) and
-             (is_ws(c4) or c4 in [?), ?(, ?,]) ->
+      {?A, <<?N, ?D, c4, _::binary>>}
+      when is_ws(c4) or c4 in [?), ?(, ?,] ->
         true
 
       _ ->
@@ -363,20 +362,17 @@ defmodule Sifter.Query.Lexer do
     end
   end
 
-  defp is_connector_at_boundary(<<c1, c2>>, rest)
-       when c1 in [?O, ?o] and c2 in [?R, ?r] do
+  defp is_connector_at_boundary(<<?O, ?R>>, rest) do
     if at_term_boundary(rest), do: {:or, 2}, else: :none
   end
 
-  defp is_connector_at_boundary(<<c1, c2, c3>>, rest)
-       when c1 in [?A, ?a] and c2 in [?N, ?n] and c3 in [?D, ?d] do
+  defp is_connector_at_boundary(<<?A, ?N, ?D>>, rest) do
     if at_term_boundary(rest), do: {:and, 3}, else: :none
   end
 
   defp is_connector_at_boundary(_, _), do: :none
 
-  defp is_not_modifier_at_boundary(<<c1, c2, c3>>, rest)
-       when c1 in [?N, ?n] and c2 in [?O, ?o] and c3 in [?T, ?t] do
+  defp is_not_modifier_at_boundary(<<?N, ?O, ?T>>, rest) do
     case rest do
       <<c, _::binary>> when is_ws(c) -> {:not, 3}
       _ -> :none
@@ -504,9 +500,8 @@ defmodule Sifter.Query.Lexer do
 
       {off1, rest1, ws_len} when ws_len > 0 ->
         case rest1 do
-          <<c1, c2, c3, ws, c4, c5, rest2::binary>>
-          when (c1 == ?N or c1 == ?n) and (c2 == ?O or c2 == ?o) and (c3 == ?T or c3 == ?t) and
-                 is_ws(ws) and (c4 == ?I or c4 == ?i) and (c5 == ?N or c5 == ?n) ->
+          <<?N, ?O, ?T, ws, ?I, ?N, rest2::binary>>
+          when is_ws(ws) ->
             case rest2 do
               <<c6, _::binary>> when is_name_cont(c6) ->
                 :none
@@ -518,8 +513,7 @@ defmodule Sifter.Query.Lexer do
                 {:error, {:invalid_predicate_spacing, nil, {off1 + 6, 1}}}
             end
 
-          <<c1, c2, c3, rest2::binary>>
-          when (c1 == ?A or c1 == ?a) and (c2 == ?L or c2 == ?l) and (c3 == ?L or c3 == ?l) ->
+          <<?A, ?L, ?L, rest2::binary>> ->
             case rest2 do
               <<c4, _::binary>> when is_name_cont(c4) ->
                 :none
@@ -531,8 +525,7 @@ defmodule Sifter.Query.Lexer do
                 {:error, {:invalid_predicate_spacing, nil, {off1 + 3, 1}}}
             end
 
-          <<c1, c2, rest2::binary>>
-          when (c1 == ?I or c1 == ?i) and (c2 == ?N or c2 == ?n) ->
+          <<?I, ?N, rest2::binary>> ->
             case rest2 do
               <<c3, _::binary>> when is_name_cont(c3) ->
                 :none
