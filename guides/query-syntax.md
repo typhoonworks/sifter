@@ -26,7 +26,7 @@ status:published priority>3
 ### Case Sensitivity
 
 - **Field names**: Case-sensitive (`status` ≠ `Status`)
-- **Keywords**: Case-insensitive (`AND` = `and` = `And`)
+- **Keywords**: Case-sensitive, must be uppercase (`AND`, `OR`, `NOT`, `IN`, `ALL`)
 - **Values**: Case-sensitive (`published` ≠ `Published`)
 
 ### Automatic Field Name Conversion

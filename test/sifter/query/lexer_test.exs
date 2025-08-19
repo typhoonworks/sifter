@@ -763,11 +763,24 @@ defmodule Sifter.Query.LexerTest do
                 ]}
     end
 
-    test "keyword NOT (case-insensitive) before predicate" do
+    test "keyword NOT before predicate" do
       assert Lexer.tokenize("NOT status:live") ==
                {:ok,
                 [
                   {:NOT_MODIFIER, "NOT", nil, {0, 3}},
+                  {:FIELD_IDENTIFIER, "status", "status", {4, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {10, 1}},
+                  {:STRING_VALUE, "live", "live", {11, 4}},
+                  {:EOF, "", nil, {15, 0}}
+                ]}
+    end
+
+    test "lowercase 'not' is treated as bare term" do
+      assert Lexer.tokenize("not status:live") ==
+               {:ok,
+                [
+                  {:STRING_VALUE, "not", "not", {0, 3}},
+                  {:AND_CONNECTOR, " ", "and", {3, 1}},
                   {:FIELD_IDENTIFIER, "status", "status", {4, 6}},
                   {:EQUALITY_COMPARATOR, ":", nil, {10, 1}},
                   {:STRING_VALUE, "live", "live", {11, 4}},
@@ -786,14 +799,14 @@ defmodule Sifter.Query.LexerTest do
                 ]}
     end
 
-    test "OR connector is case-insensitive" do
-      assert Lexer.tokenize("status:live or status:draft") ==
+    test "OR connector" do
+      assert Lexer.tokenize("status:live OR status:draft") ==
                {:ok,
                 [
                   {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
                   {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
                   {:STRING_VALUE, "live", "live", {7, 4}},
-                  {:OR_CONNECTOR, "or", "or", {12, 2}},
+                  {:OR_CONNECTOR, "OR", "or", {12, 2}},
                   {:FIELD_IDENTIFIER, "status", "status", {15, 6}},
                   {:EQUALITY_COMPARATOR, ":", nil, {21, 1}},
                   {:STRING_VALUE, "draft", "draft", {22, 5}},
@@ -801,14 +814,48 @@ defmodule Sifter.Query.LexerTest do
                 ]}
     end
 
-    test "AND connector is case-insensitive" do
-      assert Lexer.tokenize("status:live And status:draft") ==
+    test "lowercase 'or' is treated as bare term" do
+      assert Lexer.tokenize("status:live or status:draft") ==
                {:ok,
                 [
                   {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
                   {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
                   {:STRING_VALUE, "live", "live", {7, 4}},
-                  {:AND_CONNECTOR, "And", "and", {12, 3}},
+                  {:AND_CONNECTOR, " ", "and", {11, 1}},
+                  {:STRING_VALUE, "or", "or", {12, 2}},
+                  {:AND_CONNECTOR, " ", "and", {14, 1}},
+                  {:FIELD_IDENTIFIER, "status", "status", {15, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {21, 1}},
+                  {:STRING_VALUE, "draft", "draft", {22, 5}},
+                  {:EOF, "", nil, {27, 0}}
+                ]}
+    end
+
+    test "AND connector" do
+      assert Lexer.tokenize("status:live AND status:draft") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
+                  {:STRING_VALUE, "live", "live", {7, 4}},
+                  {:AND_CONNECTOR, "AND", "and", {12, 3}},
+                  {:FIELD_IDENTIFIER, "status", "status", {16, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {22, 1}},
+                  {:STRING_VALUE, "draft", "draft", {23, 5}},
+                  {:EOF, "", nil, {28, 0}}
+                ]}
+    end
+
+    test "lowercase 'and' is treated as bare term" do
+      assert Lexer.tokenize("status:live and status:draft") ==
+               {:ok,
+                [
+                  {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
+                  {:EQUALITY_COMPARATOR, ":", nil, {6, 1}},
+                  {:STRING_VALUE, "live", "live", {7, 4}},
+                  {:AND_CONNECTOR, " ", "and", {11, 1}},
+                  {:STRING_VALUE, "and", "and", {12, 3}},
+                  {:AND_CONNECTOR, " ", "and", {15, 1}},
                   {:FIELD_IDENTIFIER, "status", "status", {16, 6}},
                   {:EQUALITY_COMPARATOR, ":", nil, {22, 1}},
                   {:STRING_VALUE, "draft", "draft", {23, 5}},
@@ -924,7 +971,7 @@ defmodule Sifter.Query.LexerTest do
                {:EOF, "", nil, {26, 0}}
              ] = toks
 
-      assert String.upcase(in_lex) == "IN"
+      assert in_lex == "IN"
     end
 
     test "NOT IN with quoted list" do
@@ -941,15 +988,15 @@ defmodule Sifter.Query.LexerTest do
                {:EOF, "", nil, {30, 0}}
              ] = toks
 
-      assert String.upcase(notin_lex) == "NOT IN"
+      assert notin_lex == "NOT IN"
     end
 
-    test "case-insensitive keywords + flexible whitespace" do
-      assert {:ok, toks} = Lexer.tokenize("status  in  ( 'live' ,  'draft' )")
+    test "IN must be uppercase" do
+      assert {:ok, toks} = Lexer.tokenize("status  IN  ( 'live' ,  'draft' )")
 
       assert [
                {:FIELD_IDENTIFIER, "status", "status", {0, 6}},
-               {:SET_IN, in_lex, :in, {8, 2}},
+               {:SET_IN, "IN", :in, {8, 2}},
                {:LEFT_PAREN, "(", nil, {12, 1}},
                {:STRING_VALUE, "'live'", "live", {14, 6}},
                {:COMMA, ",", nil, {21, 1}},
@@ -957,8 +1004,6 @@ defmodule Sifter.Query.LexerTest do
                {:RIGHT_PAREN, ")", nil, {32, 1}},
                {:EOF, "", nil, {33, 0}}
              ] = toks
-
-      assert String.upcase(in_lex) == "IN"
     end
 
     test "no implied AND inside lists (whitespace before comma/close)" do
@@ -1003,15 +1048,15 @@ defmodule Sifter.Query.LexerTest do
                {:EOF, "", nil, {34, 0}}
              ] = toks
 
-      assert String.upcase(all_lex) == "ALL"
+      assert all_lex == "ALL"
     end
 
-    test "ALL case-insensitive with flexible whitespace" do
-      assert {:ok, toks} = Lexer.tokenize("tags.name  all  ('backend', 'urgent')")
+    test "ALL must be uppercase" do
+      assert {:ok, toks} = Lexer.tokenize("tags.name  ALL  ('backend', 'urgent')")
 
       assert [
                {:FIELD_IDENTIFIER, "tags.name", "tags.name", {0, 9}},
-               {:SET_CONTAINS_ALL, all_lex, :contains_all, {11, 3}},
+               {:SET_CONTAINS_ALL, "ALL", :contains_all, {11, 3}},
                {:LEFT_PAREN, "(", nil, {16, 1}},
                {:STRING_VALUE, "'backend'", "backend", {17, 9}},
                {:COMMA, ",", nil, {26, 1}},
@@ -1019,8 +1064,6 @@ defmodule Sifter.Query.LexerTest do
                {:RIGHT_PAREN, ")", nil, {36, 1}},
                {:EOF, "", nil, {37, 0}}
              ] = toks
-
-      assert String.upcase(all_lex) == "ALL"
     end
 
     test "field followed by bare word starting with 'all' is not a set op" do
@@ -1031,6 +1074,55 @@ defmodule Sifter.Query.LexerTest do
                   {:AND_CONNECTOR, " ", "and", {6, 1}},
                   {:STRING_VALUE, "allowed", "allowed", {7, 7}},
                   {:EOF, "", nil, {14, 0}}
+                ]}
+    end
+
+    test "lowercase 'in' is treated as bare term, not a set operator" do
+      assert Lexer.tokenize("status in ('live','draft')") ==
+               {:ok,
+                [
+                  {:STRING_VALUE, "status", "status", {0, 6}},
+                  {:AND_CONNECTOR, " ", "and", {6, 1}},
+                  {:STRING_VALUE, "in", "in", {7, 2}},
+                  {:AND_CONNECTOR, " ", "and", {9, 1}},
+                  {:LEFT_PAREN, "(", nil, {10, 1}},
+                  {:STRING_VALUE, "'live'", "live", {11, 6}},
+                  {:COMMA, ",", nil, {17, 1}},
+                  {:STRING_VALUE, "'draft'", "draft", {18, 7}},
+                  {:RIGHT_PAREN, ")", nil, {25, 1}},
+                  {:EOF, "", nil, {26, 0}}
+                ]}
+    end
+
+    test "lowercase 'not in' is treated as bare terms" do
+      assert Lexer.tokenize("status not in ('live')") ==
+               {:ok,
+                [
+                  {:STRING_VALUE, "status", "status", {0, 6}},
+                  {:AND_CONNECTOR, " ", "and", {6, 1}},
+                  {:STRING_VALUE, "not", "not", {7, 3}},
+                  {:AND_CONNECTOR, " ", "and", {10, 1}},
+                  {:STRING_VALUE, "in", "in", {11, 2}},
+                  {:AND_CONNECTOR, " ", "and", {13, 1}},
+                  {:LEFT_PAREN, "(", nil, {14, 1}},
+                  {:STRING_VALUE, "'live'", "live", {15, 6}},
+                  {:RIGHT_PAREN, ")", nil, {21, 1}},
+                  {:EOF, "", nil, {22, 0}}
+                ]}
+    end
+
+    test "lowercase 'all' is treated as bare term" do
+      assert Lexer.tokenize("tags all ('backend')") ==
+               {:ok,
+                [
+                  {:STRING_VALUE, "tags", "tags", {0, 4}},
+                  {:AND_CONNECTOR, " ", "and", {4, 1}},
+                  {:STRING_VALUE, "all", "all", {5, 3}},
+                  {:AND_CONNECTOR, " ", "and", {8, 1}},
+                  {:LEFT_PAREN, "(", nil, {9, 1}},
+                  {:STRING_VALUE, "'backend'", "backend", {10, 9}},
+                  {:RIGHT_PAREN, ")", nil, {19, 1}},
+                  {:EOF, "", nil, {20, 0}}
                 ]}
     end
   end
