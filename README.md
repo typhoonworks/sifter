@@ -1,5 +1,10 @@
 # Sifter
 
+<p align="center">
+  <img src="images/banner.png" alt="Sifter Banner" />
+</p>
+
+
 <p>
   <a href="https://hex.pm/packages/sifter">
     <img alt="Hex Version" src="https://img.shields.io/hexpm/v/sifter.svg">
@@ -7,8 +12,8 @@
   <a href="https://hexdocs.pm/sifter">
     <img src="https://img.shields.io/badge/docs-hexdocs-blue" alt="HexDocs">
   </a>
-  <a href="https://github.com/yourusername/sifter/actions">
-    <img alt="CI Status" src="https://github.com/yourusername/sifter/workflows/ci/badge.svg">
+  <a href="https://github.com/typhoonworks/sifter/actions">
+    <img alt="CI Status" src="https://github.com/typhoonworks/sifter/workflows/ci/badge.svg">
   </a>
 </p>
 
