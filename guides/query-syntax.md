@@ -47,7 +47,8 @@ Match exact field values:
 ```
 status:published
 category:tech
-authorId:123
+author_id:123
+organization_id:NULL     # Match records where organization_id is NULL
 ```
 
 ### Comparison Operators
@@ -81,9 +82,15 @@ Test membership in a list of values:
 status IN (draft, published, review)
 category IN (tech, science)
 
+# IN with NULL - match NULL or specific values
+organization_id IN (NULL, 123, 456)
+
 # NOT IN - exclude any value in the list
 status NOT IN (archived, deleted)
 priority NOT IN (1, 2)
+
+# NOT IN with NULL - exclude NULL and specific values
+priority NOT IN (NULL, 0)
 ```
 
 **Notes on Lists**:
@@ -168,7 +175,7 @@ status IN (draft, 'in progress', archived)  # ✓ Mixed
 # Usually work unquoted, but quoting is safer
 price>=3.14          # ✓ Usually works
 price>='3.14'        # ✓ Safer (avoids potential dot confusion)
-rating<=4.5          # ✓ Usually works  
+rating<=4.5          # ✓ Usually works
 rating<='4.5'        # ✓ Safer
 ```
 
@@ -203,7 +210,7 @@ Find values starting with a pattern:
 
 ```
 title:Introduction*      # Titles starting with "Introduction"
-author.name:John*       # Authors whose names start with "John"  
+author.name:John*       # Authors whose names start with "John"
 category:tech*          # Categories starting with "tech"
 ```
 
@@ -235,7 +242,7 @@ status:published AND priority>3
 (status:draft OR status:review) AND priority>5
 ```
 
-### OR Operator  
+### OR Operator
 
 Combine alternative conditions (lower precedence than AND):
 
@@ -268,7 +275,7 @@ Negate field-based predicates and groups:
 NOT status:archived
 NOT (status:draft OR status:spam)
 
-# Shorthand with dash (no space after)  
+# Shorthand with dash (no space after)
 -status:archived
 -(priority>5 AND category:urgent)
 ```
@@ -397,9 +404,9 @@ field.123       # Association part cannot start with number
 
 ```
 # Complex product filtering
-(category:electronics OR category:computers) 
-AND price<=500 
-AND rating>=4.0 
+(category:electronics OR category:computers)
+AND price<=500
+AND rating>=4.0
 AND NOT discontinued:true
 AND brand IN (apple, samsung, sony)
 ```
@@ -408,8 +415,8 @@ AND brand IN (apple, samsung, sony)
 
 ```
 # Editorial workflow
-(status:draft OR status:review) 
-AND author.role:editor 
+(status:draft OR status:review)
+AND author.role:editor
 AND createdAt>='2024-01-01'
 AND tags.name:featured
 AND NOT status:spam
@@ -418,9 +425,9 @@ AND NOT status:spam
 ### User Analytics
 
 ```
-# Active user analysis  
+# Active user analysis
 lastLoginAt>'2024-01-01'
-AND subscriptionStatus:active 
+AND subscriptionStatus:active
 AND organization.tier IN (premium, enterprise)
 AND NOT role:guest
 ```
@@ -429,7 +436,7 @@ AND NOT role:guest
 
 ```
 # Date range with proper quoting for ISO datetimes
-createdAt>='2024-01-01T00:00:00Z' 
+createdAt>='2024-01-01T00:00:00Z'
 AND createdAt<='2024-12-31T23:59:59Z'
 AND status:published
 ```
@@ -453,7 +460,7 @@ AND machine learning    # Full-text search
 field:>value        # ✗ Cannot combine : with >
 field IN value      # ✗ IN requires parentheses
 
-# Malformed groups  
+# Malformed groups
 (field:value        # ✗ Missing closing paren
 field:value)        # ✗ Missing opening paren
 ()                  # ✗ Empty groups not allowed
@@ -499,7 +506,7 @@ category IN ('high priority', urgent, 'auto-generated')  # Mix as needed
 
 # Simple values can remain unquoted
 status:active
-priority:5  
+priority:5
 category IN (tech, science, elixir)
 ```
 

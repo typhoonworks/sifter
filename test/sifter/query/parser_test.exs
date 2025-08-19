@@ -229,7 +229,49 @@ defmodule Sifter.Query.ParserTest do
     end
   end
 
-  describe "set membership (IN / NOT IN)" do
+  describe "NULL sentinel" do
+    test "NULL with equality" do
+      tokens = [
+        {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
+        {:EQUALITY_COMPARATOR, ":", nil, {0, 0}},
+        {:STRING_VALUE, "NULL", "NULL", {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Parser.parse(tokens) ==
+               {:ok, eq(["status"], nil)}
+    end
+
+    test "NULL with NOT modifier" do
+      tokens = [
+        {:NOT_MODIFIER, "NOT", nil, {0, 0}},
+        {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
+        {:EQUALITY_COMPARATOR, ":", nil, {0, 0}},
+        {:STRING_VALUE, "NULL", "NULL", {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Sifter.Query.Parser.parse(tokens) ==
+               {:ok,
+                %Sifter.AST.Not{
+                  expr: eq(["status"], nil)
+                }}
+    end
+
+    test "NULL literal" do
+      tokens = [
+        {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
+        {:EQUALITY_COMPARATOR, ":", nil, {0, 0}},
+        {:STRING_VALUE, "'NULL'", "NULL", {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Sifter.Query.Parser.parse(tokens) ==
+               {:ok, eq(["status"], "NULL")}
+    end
+  end
+
+  describe "set membership (IN / NOT IN / ALL)" do
     test "IN with quoted list" do
       tokens = [
         {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
@@ -260,6 +302,38 @@ defmodule Sifter.Query.ParserTest do
 
       assert Parser.parse(tokens) ==
                {:ok, nin(["status"], ["live", "draft"])}
+    end
+
+    test "IN with NULL in list" do
+      tokens = [
+        {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
+        {:SET_IN, "IN", :in, {0, 0}},
+        {:LEFT_PAREN, "(", nil, {0, 0}},
+        {:STRING_VALUE, "'live'", "live", {0, 0}},
+        {:COMMA, ",", nil, {0, 0}},
+        {:STRING_VALUE, "NULL", "NULL", {0, 0}},
+        {:RIGHT_PAREN, ")", nil, {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Parser.parse(tokens) ==
+               {:ok, inn(["status"], ["live", nil])}
+    end
+
+    test "NOT IN with NULL in list" do
+      tokens = [
+        {:FIELD_IDENTIFIER, "status", "status", {0, 0}},
+        {:SET_NOT_IN, "NOT IN", :not_in, {0, 0}},
+        {:LEFT_PAREN, "(", nil, {0, 0}},
+        {:STRING_VALUE, "'live'", "live", {0, 0}},
+        {:COMMA, ",", nil, {0, 0}},
+        {:STRING_VALUE, "NULL", "NULL", {0, 0}},
+        {:RIGHT_PAREN, ")", nil, {0, 0}},
+        {:EOF, "", nil, {0, 0}}
+      ]
+
+      assert Parser.parse(tokens) ==
+               {:ok, nin(["status"], ["live", nil])}
     end
 
     test "ALL with quoted list" do

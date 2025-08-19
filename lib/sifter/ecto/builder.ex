@@ -6,54 +6,6 @@ defmodule Sifter.Ecto.Builder do
   and Ecto's query DSL, generating dynamic SQL fragments that can be applied to Ecto queries.
   The Builder handles field validation, type casting, association joins, and full-text search
   strategies while providing comprehensive metadata about the generated query.
-
-  ## Supported Operations
-
-  The Builder supports all comparison and set operations defined in `Sifter.AST`:
-
-  - **Equality**: `:eq` (`:`) - Exact match or wildcard patterns
-  - **Inequality**: `:neq` - Not equal comparison
-  - **Relational**: `:gt` (`>`), `:gte` (`>=`), `:lt` (`<`), `:lte` (`<=`) - Numeric/date comparisons
-  - **Set operations**: `:in`, `:nin`, `:contains_all` - Membership testing with lists
-  - **String matching**: `:starts_with` (`prefix*`), `:ends_with` (`*suffix`) - Pattern matching
-
-  ## Field Path Resolution
-
-  Field paths support dot notation for traversing associations:
-
-  - `"status"` - Root field on the primary schema
-  - `"organization.name"` - Field on a belongs_to or has_one association
-  - `"tags.name"` - Field on a has_many or many_to_many association
-
-  ## Association Join Behavior
-
-  The Builder automatically determines when associations need to be joined:
-
-  - **One-to-one joins** (belongs_to, has_one): No DISTINCT required
-  - **One-to-many joins** (has_many, many_to_many): Automatically applies DISTINCT
-  - **Join strategy**: Always uses LEFT JOIN to preserve records without associations
-
-  ## Type Casting and Validation
-
-  All field values are automatically cast to their Ecto schema types:
-
-  - String values cast to appropriate numeric, date, or boolean types
-  - List values for IN/NOT IN operations cast element-wise
-  - Invalid values return `{:error, :invalid_value}`
-
-  ## Performance Considerations
-
-  - The Builder generates efficient SQL with proper indexing hints
-  - Many-to-many joins automatically include DISTINCT to prevent duplicate rows
-  - TSVector strategies provide ranking metadata for search result ordering
-  - Field resolution is optimized for common access patterns
-
-  ## Notes
-
-  This module is designed for internal use within the Sifter library. Most users
-  should interact with the higher-level `Sifter` module rather than calling
-  the Builder directly. The Builder assumes well-formed AST input from the Parser
-  and focuses on efficient query generation rather than input validation.
   """
 
   import Ecto.Query
@@ -63,16 +15,14 @@ defmodule Sifter.Ecto.Builder do
           uses_full_text?: boolean(),
           added_select_fields: [atom()],
           recommended_order: [{atom(), :asc | :desc}] | nil,
-          warnings: [map()] | nil,
-          assoc_contains_all: [map()] | nil
+          warnings: [map()] | nil
         }
 
   @default_meta %{
     uses_full_text?: false,
     added_select_fields: [],
     recommended_order: nil,
-    warnings: [],
-    assoc_contains_all: []
+    warnings: []
   }
 
   @spec apply(Ecto.Queryable.t(), AST.t(), keyword()) ::
@@ -109,6 +59,11 @@ defmodule Sifter.Ecto.Builder do
     assoc_needed = ast_assoc_allowed?(ast, allow) or search_fields_assoc?(ft_fields)
     assoc_name = if assoc_needed, do: pick_first_assoc_allowed(ast, ft_fields, allow), else: nil
 
+    need_alias? =
+      needs_root_alias?(ast, allow) or needs_root_alias_for_assoc?(root_schema, assoc_name)
+
+    query = if need_alias?, do: from(root in query, as: :root), else: query
+
     {query1, related_schema, shape, many?} =
       maybe_join_once(query, root_schema, assoc_name)
 
@@ -129,15 +84,42 @@ defmodule Sifter.Ecto.Builder do
             :with_assoc -> where(query1, [root, j], ^dyn)
           end
 
-        q3 = apply_assoc_contains_all_aggregation(q2, meta, shape)
-
-        q3 = if many?, do: distinct(q3, true), else: q3
-        {:ok, q3, meta}
+        q2 = if many?, do: distinct(q2, true), else: q2
+        {:ok, q2, meta}
 
       {:error, reason} ->
         {:error, {:builder, reason}}
     end
   end
+
+  defp needs_root_alias?(ast, allow), do: contains_all_assoc?(ast, allow)
+
+  defp needs_root_alias_for_assoc?(_root_schema, nil), do: false
+
+  defp needs_root_alias_for_assoc?(root_schema, assoc_str) when is_binary(assoc_str) do
+    assoc_atom = String.to_atom(assoc_str)
+
+    case root_schema.__schema__(:association, assoc_atom) do
+      %Ecto.Association.ManyToMany{} -> true
+      _ -> false
+    end
+  end
+
+  defp contains_all_assoc?(%AST.Cmp{op: :contains_all, field_path: fp}, allow) do
+    case resolve_allowed_path(fp, allow, unknown_field: :ignore) do
+      {:ok, resolved} when length(resolved) > 1 -> true
+      _ -> false
+    end
+  end
+
+  defp contains_all_assoc?(%AST.And{children: cs}, allow),
+    do: Enum.any?(cs, &contains_all_assoc?(&1, allow))
+
+  defp contains_all_assoc?(%AST.Or{children: cs}, allow),
+    do: Enum.any?(cs, &contains_all_assoc?(&1, allow))
+
+  defp contains_all_assoc?(%AST.Not{expr: e}, allow), do: contains_all_assoc?(e, allow)
+  defp contains_all_assoc?(_, _), do: false
 
   defp maybe_join_once(query, _root_schema, nil),
     do: {query, nil, :root_only, false}
@@ -147,23 +129,48 @@ defmodule Sifter.Ecto.Builder do
 
     case root_schema.__schema__(:association, assoc_atom) do
       %Ecto.Association.Has{related: rel, owner_key: owner_key, related_key: related_key} ->
+        rel_q = Ecto.Queryable.to_query(rel)
+
         q =
-          join(query, :left, [root], j in ^rel,
+          join(query, :left, [root], j in subquery(rel_q),
             on: field(j, ^related_key) == field(root, ^owner_key)
           )
 
         {q, rel, :with_assoc, true}
 
       %Ecto.Association.BelongsTo{related: rel, owner_key: owner_key, related_key: related_key} ->
+        rel_q = Ecto.Queryable.to_query(rel)
+
         q =
-          join(query, :left, [root], j in ^rel,
+          join(query, :left, [root], j in subquery(rel_q),
             on: field(root, ^owner_key) == field(j, ^related_key)
           )
 
         {q, rel, :with_assoc, false}
 
-      %Ecto.Association.ManyToMany{related: rel} ->
-        q = join(query, :left, [root], j in assoc(root, ^assoc_atom))
+      %Ecto.Association.ManyToMany{} = a ->
+        rel = a.related
+        jt = a.join_through
+        owner_mod = a.owner
+
+        owner_pk = owner_mod.__schema__(:primary_key) |> List.first()
+        related_pk = rel.__schema__(:primary_key) |> List.first()
+
+        {owner_fk, rel_fk} = m2m_fk_columns(a, owner_mod, rel)
+
+        rel_q = Ecto.Queryable.to_query(rel)
+        jt_q = Ecto.Queryable.to_query(jt)
+
+        sub =
+          rel_q
+          |> join(:inner, [j], jt0 in subquery(jt_q),
+            on: field(jt0, ^rel_fk) == field(j, ^related_pk)
+          )
+          |> where([_j, jt0], field(jt0, ^owner_fk) == field(parent_as(:root), ^owner_pk))
+          |> select([j, _jt0], j)
+
+        q = join(query, :left_lateral, [root], j in subquery(sub), on: true)
+
         {q, rel, :with_assoc, true}
 
       _ ->
@@ -171,13 +178,46 @@ defmodule Sifter.Ecto.Builder do
     end
   end
 
-  defp pick_first_assoc_allowed(ast, ft, allow) do
-    first_assoc_in_ast_allowed(ast, allow) || first_assoc_in_ft(ft)
+  defp m2m_fk_columns(%Ecto.Association.ManyToMany{join_keys: join_keys} = _a, owner_mod, rel) do
+    cond do
+      Keyword.has_key?(join_keys, :source) and Keyword.has_key?(join_keys, :destination) ->
+        {Keyword.fetch!(join_keys, :source), Keyword.fetch!(join_keys, :destination)}
+
+      true ->
+        owner_src = owner_mod.__schema__(:source) |> singular_guess()
+        related_src = rel.__schema__(:source) |> singular_guess()
+
+        keys = Keyword.keys(join_keys)
+
+        owner_fk =
+          Enum.find(keys, fn k ->
+            s = Atom.to_string(k)
+            String.contains?(s, owner_src <> "_") or String.starts_with?(s, owner_src)
+          end) || hd(keys)
+
+        rel_fk =
+          Enum.find(keys, fn k ->
+            k != owner_fk and
+              (
+                s = Atom.to_string(k)
+                String.contains?(s, related_src <> "_") or String.starts_with?(s, related_src)
+              )
+          end) || (keys -- [owner_fk]) |> hd()
+
+        {owner_fk, rel_fk}
+    end
   end
 
-  defp ast_assoc_allowed?(%AST.Cmp{field_path: fp}, allow) when length(fp) > 1 do
+  defp singular_guess(s) do
+    if String.ends_with?(s, "s"), do: String.trim_trailing(s, "s"), else: s
+  end
+
+  defp pick_first_assoc_allowed(ast, ft, allow),
+    do: first_assoc_in_ast_allowed(ast, allow) || first_assoc_in_ft(ft)
+
+  defp ast_assoc_allowed?(%AST.Cmp{field_path: fp}, allow) do
     case resolve_allowed_path(fp, allow, unknown_field: :ignore) do
-      {:ok, _} -> true
+      {:ok, resolved_fp} when length(resolved_fp) > 1 -> true
       _ -> false
     end
   end
@@ -197,9 +237,9 @@ defmodule Sifter.Ecto.Builder do
 
   defp search_fields_assoc?(_), do: false
 
-  defp first_assoc_in_ast_allowed(%AST.Cmp{field_path: fp}, allow) when length(fp) > 1 do
+  defp first_assoc_in_ast_allowed(%AST.Cmp{field_path: fp}, allow) do
     case resolve_allowed_path(fp, allow, unknown_field: :ignore) do
-      {:ok, resolved} -> List.first(resolved)
+      {:ok, resolved} when length(resolved) > 1 -> List.first(resolved)
       _ -> nil
     end
   end
@@ -301,7 +341,6 @@ defmodule Sifter.Ecto.Builder do
     options = opts[:options]
 
     sanitized_term = sanitize_term(term, options)
-
     tsquery_mode = determine_tsquery_mode(ft_strategy, options)
 
     case build_search(
@@ -326,34 +365,45 @@ defmodule Sifter.Ecto.Builder do
   defp not_dyn(d, :root_only), do: dynamic([root], not (^d))
   defp not_dyn(d, :with_assoc), do: dynamic([root, j], not (^d))
 
+  defp is_null_dyn(:root, f, :root_only), do: dynamic([root], is_nil(field(root, ^f)))
+  defp is_null_dyn(:root, f, :with_assoc), do: dynamic([root, _j], is_nil(field(root, ^f)))
+  defp is_null_dyn(:assoc, f, :with_assoc), do: dynamic([_root, j], is_nil(field(j, ^f)))
+
+  defp not_null_dyn(:root, f, :root_only), do: dynamic([root], not is_nil(field(root, ^f)))
+  defp not_null_dyn(:root, f, :with_assoc), do: dynamic([root, _j], not is_nil(field(root, ^f)))
+  defp not_null_dyn(:assoc, f, :with_assoc), do: dynamic([_root, j], not is_nil(field(j, ^f)))
+
   defp merge_meta(a, b) do
     %{
       uses_full_text?: a.uses_full_text? or b.uses_full_text?,
       added_select_fields: Enum.uniq(a.added_select_fields ++ b.added_select_fields),
       recommended_order: b.recommended_order || a.recommended_order,
-      warnings: (a[:warnings] || []) ++ (b[:warnings] || []),
-      assoc_contains_all: (a[:assoc_contains_all] || []) ++ (b[:assoc_contains_all] || [])
+      warnings: (a[:warnings] || []) ++ (b[:warnings] || [])
     }
   end
 
-  defp handle_contains_all(:contains_all, binding, field_atom, type, casted, shape, resolved_fp) do
-    case {binding, type, shape} do
-      {:root, {:array, inner}, shape} ->
-        dyn = contains_all_array_dyn(:root, field_atom, casted, inner, shape)
+  defp handle_contains_all(
+         :contains_all,
+         binding,
+         field_atom,
+         type,
+         casted,
+         shape,
+         resolved_fp,
+         root_schema
+       ) do
+    case {binding, type} do
+      {:root, {:array, _inner}} ->
+        dyn = contains_all_array_dyn(:root, field_atom, casted, shape)
         {:contains_all_handled, {:ok, dyn, @default_meta}}
 
-      {:assoc, _type, :with_assoc} ->
-        dyn = dynamic([_root, j], field(j, ^field_atom) in ^casted)
-        unique_count = length(Enum.uniq(casted))
+      {:assoc, _type} ->
+        [assoc_name | _] = resolved_fp
+        assoc_atom = String.to_atom(assoc_name)
+        dyn = assoc_contains_all_dyn(root_schema, assoc_atom, field_atom, casted)
+        {:contains_all_handled, {:ok, dyn, @default_meta}}
 
-        meta = %{
-          @default_meta
-          | assoc_contains_all: [%{field_atom: field_atom, count: unique_count}]
-        }
-
-        {:contains_all_handled, {:ok, dyn, meta}}
-
-      {:root, _not_array, shape} ->
+      {:root, _not_array} ->
         dyn =
           case shape do
             :root_only -> dynamic([root], field(root, ^field_atom) in ^casted)
@@ -371,67 +421,71 @@ defmodule Sifter.Ecto.Builder do
     end
   end
 
-  defp handle_contains_all(_op, _binding, _field_atom, _type, _casted, _shape, _resolved_fp) do
-    :not_contains_all
-  end
+  defp handle_contains_all(_op, _binding, _field_atom, _type, _casted, _shape, _fp, _rs),
+    do: :not_contains_all
 
-  defp contains_all_array_dyn(:root, field_atom, casted, _inner, :root_only) do
+  defp contains_all_array_dyn(:root, field_atom, casted, :root_only) do
     dynamic([root], fragment("? @> ?::text[]", field(root, ^field_atom), ^casted))
   end
 
-  defp contains_all_array_dyn(:root, field_atom, casted, _inner, :with_assoc) do
+  defp contains_all_array_dyn(:root, field_atom, casted, :with_assoc) do
     dynamic([root, _j], fragment("? @> ?::text[]", field(root, ^field_atom), ^casted))
   end
 
-  defp apply_assoc_contains_all_aggregation(query, meta, shape) do
-    assoc_contains_all = meta[:assoc_contains_all] || []
+  defp assoc_contains_all_dyn(root_schema, assoc_atom, field_atom, values) when is_list(values) do
+    needed = values |> Enum.uniq() |> length()
 
-    if Enum.empty?(assoc_contains_all) do
-      query
-    else
-      case shape do
-        :with_assoc ->
-          root_pk = get_primary_key_field(query)
+    case root_schema.__schema__(:association, assoc_atom) do
+      %Ecto.Association.Has{related: rel, owner_key: owner_key, related_key: related_key} ->
+        rel_q =
+          rel
+          |> Ecto.Queryable.to_query()
+          |> where([j], field(j, ^related_key) == field(parent_as(:root), ^owner_key))
+          |> where([j], field(j, ^field_atom) in ^values)
+          |> select([j], field(j, ^field_atom))
+          |> distinct(true)
 
-          having_conditions =
-            Enum.map(assoc_contains_all, fn %{field_atom: field_atom, count: count} ->
-              dynamic([_root, j], count(field(j, ^field_atom), :distinct) == ^count)
-            end)
+        dynamic([root], fragment("SELECT count(*) FROM (?) AS s", subquery(rel_q)) == ^needed)
 
-          combined_having =
-            case having_conditions do
-              [] ->
-                nil
+      %Ecto.Association.BelongsTo{related: rel, owner_key: owner_key, related_key: related_key} ->
+        rel_q =
+          rel
+          |> Ecto.Queryable.to_query()
+          |> where([j], field(parent_as(:root), ^owner_key) == field(j, ^related_key))
+          |> where([j], field(j, ^field_atom) in ^values)
+          |> select([j], field(j, ^field_atom))
+          |> distinct(true)
 
-              [single] ->
-                single
+        dynamic([root], fragment("SELECT count(*) FROM (?) AS s", subquery(rel_q)) == ^needed)
 
-              multiple ->
-                Enum.reduce(multiple, fn having, acc ->
-                  dynamic([root, j], ^acc and ^having)
-                end)
-            end
+      %Ecto.Association.ManyToMany{} = a ->
+        rel = a.related
+        jt = a.join_through
+        owner_mod = a.owner
 
-          query
-          |> group_by([root, _j], field(root, ^root_pk))
-          |> having([_root, j], ^combined_having)
+        owner_pk = owner_mod.__schema__(:primary_key) |> List.first()
+        related_pk = rel.__schema__(:primary_key) |> List.first()
 
-        :root_only ->
-          query
-      end
-    end
-  end
+        {owner_fk, rel_fk} = m2m_fk_columns(a, owner_mod, rel)
 
-  defp get_primary_key_field(query) do
-    case query.from do
-      %{source: {_table, schema}} when is_atom(schema) ->
-        case schema.__schema__(:primary_key) do
-          [pk | _] -> pk
-          [] -> :id
-        end
+        rel_q = Ecto.Queryable.to_query(rel)
+        jt_q = Ecto.Queryable.to_query(jt)
 
-      _ ->
-        :id
+        sub =
+          rel_q
+          |> join(:inner, [j], jt0 in subquery(jt_q),
+            on: field(jt0, ^rel_fk) == field(j, ^related_pk)
+          )
+          |> where([_j, jt0], field(jt0, ^owner_fk) == field(parent_as(:root), ^owner_pk))
+          |> where([j, _jt0], field(j, ^field_atom) in ^values)
+          |> select([j, _jt0], field(j, ^field_atom))
+          |> distinct(true)
+
+        dynamic([root], fragment("SELECT count(*) FROM (?) AS s", subquery(sub)) == ^needed)
+
+      other ->
+        raise ArgumentError,
+              "CONTAINS_ALL unsupported on association #{inspect(assoc_atom)}: #{inspect(other)}"
     end
   end
 
@@ -458,26 +512,103 @@ defmodule Sifter.Ecto.Builder do
           {:ok, date_only_dyn(binding, field_atom, op, d, datetime_type, shape), @default_meta}
 
         {:ok, casted} ->
-          case handle_contains_all(op, binding, field_atom, type, casted, shape, resolved_fp) do
-            {:contains_all_handled, result} ->
-              result
+          case {op, casted} do
+            {op, nil} when op in [:gt, :gte, :lt, :lte] ->
+              {:error, {:invalid_null_comparison, op}}
 
-            :not_contains_all ->
-              {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+            {:in, list} when is_list(list) ->
+              if Enum.any?(list, &is_nil/1) do
+                {nonnull, _} = Enum.split_with(list, &(!is_nil(&1)))
+
+                d_in =
+                  if nonnull == [] do
+                    nil
+                  else
+                    cmp_dyn(binding, field_atom, :in, nonnull, shape)
+                  end
+
+                d_null = is_null_dyn(binding, field_atom, shape)
+
+                dyn = if d_in, do: or_dyn(d_in, d_null, shape), else: d_null
+                {:ok, dyn, @default_meta}
+              else
+                case handle_contains_all(
+                       op,
+                       binding,
+                       field_atom,
+                       type,
+                       casted,
+                       shape,
+                       resolved_fp,
+                       root_schema
+                     ) do
+                  {:contains_all_handled, result} ->
+                    result
+
+                  :not_contains_all ->
+                    {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+                end
+              end
+
+            {:nin, list} when is_list(list) ->
+              if Enum.any?(list, &is_nil/1) do
+                {nonnull, _} = Enum.split_with(list, &(!is_nil(&1)))
+
+                d_not_in =
+                  if nonnull == [] do
+                    nil
+                  else
+                    cmp_dyn(binding, field_atom, :nin, nonnull, shape)
+                  end
+
+                d_not_null = not_null_dyn(binding, field_atom, shape)
+                dyn = if d_not_in, do: and_dyn(d_not_in, d_not_null, shape), else: d_not_null
+                {:ok, dyn, @default_meta}
+              else
+                case handle_contains_all(
+                       op,
+                       binding,
+                       field_atom,
+                       type,
+                       casted,
+                       shape,
+                       resolved_fp,
+                       root_schema
+                     ) do
+                  {:contains_all_handled, result} ->
+                    result
+
+                  :not_contains_all ->
+                    {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+                end
+              end
+
+            _ ->
+              case handle_contains_all(
+                     op,
+                     binding,
+                     field_atom,
+                     type,
+                     casted,
+                     shape,
+                     resolved_fp,
+                     root_schema
+                   ) do
+                {:contains_all_handled, result} ->
+                  result
+
+                :not_contains_all ->
+                  {:ok, cmp_dyn(binding, field_atom, op, casted, shape), @default_meta}
+              end
           end
 
         {:error, reason} ->
           {:error, reason}
       end
     else
-      {:ignore, warning} ->
-        {:ok, nil, Map.put(@default_meta, :warnings, [warning])}
-
-      :ignore ->
-        {:ok, nil, @default_meta}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ignore, warning} -> {:ok, nil, Map.put(@default_meta, :warnings, [warning])}
+      :ignore -> {:ok, nil, @default_meta}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -603,11 +734,8 @@ defmodule Sifter.Ecto.Builder do
     end
   end
 
-  defp build_search(_term, nil, _st, _col, _r, _rel, _shape, _mode),
-    do: {:ok, nil, @default_meta}
-
-  defp build_search(_term, [], _st, _col, _r, _rel, _shape, _mode),
-    do: {:ok, nil, @default_meta}
+  defp build_search(_term, nil, _st, _col, _r, _rel, _shape, _mode), do: {:ok, nil, @default_meta}
+  defp build_search(_term, [], _st, _col, _r, _rel, _shape, _mode), do: {:ok, nil, @default_meta}
 
   defp build_search(term, _fields, {:column, {cfg, col}}, _ftcol, _r, _rel, shape, tsquery_mode) do
     dyn = tsquery_fragment(cfg, col, term, shape, tsquery_mode)
@@ -622,7 +750,7 @@ defmodule Sifter.Ecto.Builder do
     {:ok, dyn, meta}
   end
 
-  defp build_search(term, fields, :ilike, _col, root_schema, rel_schema, shape, _tsquery_mode)
+  defp build_search(term, fields, :ilike, _col, root_schema, rel_schema, shape, _mode)
        when is_list(fields) do
     parts =
       fields
@@ -710,14 +838,13 @@ defmodule Sifter.Ecto.Builder do
         many -> Enum.reduce(many, fn d, acc -> or_dyn(acc, d, shape) end)
       end
 
-    meta = %{
-      uses_full_text?: not is_nil(dyn),
-      added_select_fields: [],
-      recommended_order: nil,
-      warnings: []
-    }
-
-    {:ok, dyn, meta}
+    {:ok, dyn,
+     %{
+       uses_full_text?: not is_nil(dyn),
+       added_select_fields: [],
+       recommended_order: nil,
+       warnings: []
+     }}
   end
 
   defp build_search(
@@ -761,14 +888,13 @@ defmodule Sifter.Ecto.Builder do
         many -> Enum.reduce(many, fn d, acc -> or_dyn(acc, d, shape) end)
       end
 
-    meta = %{
-      uses_full_text?: not is_nil(dyn),
-      added_select_fields: [],
-      recommended_order: nil,
-      warnings: []
-    }
-
-    {:ok, dyn, meta}
+    {:ok, dyn,
+     %{
+       uses_full_text?: not is_nil(dyn),
+       added_select_fields: [],
+       recommended_order: nil,
+       warnings: []
+     }}
   end
 
   defp normalize_allowed_fields([]), do: %{allow_all?: true, allowed: MapSet.new(), mapping: %{}}
@@ -795,17 +921,10 @@ defmodule Sifter.Ecto.Builder do
     as = Enum.join(fp, ".")
 
     cond do
-      Map.has_key?(mapping, as) ->
-        {:ok, String.split(mapping[as], ".", parts: :infinity)}
-
-      MapSet.member?(allowed, as) ->
-        {:ok, fp}
-
-      MapSet.member?(allowed, List.first(fp)) and length(fp) == 1 ->
-        {:ok, fp}
-
-      true ->
-        handle_unknown_field(fp, opts)
+      Map.has_key?(mapping, as) -> {:ok, String.split(mapping[as], ".", parts: :infinity)}
+      MapSet.member?(allowed, as) -> {:ok, fp}
+      MapSet.member?(allowed, List.first(fp)) and length(fp) == 1 -> {:ok, fp}
+      true -> handle_unknown_field(fp, opts)
     end
   end
 
@@ -833,19 +952,16 @@ defmodule Sifter.Ecto.Builder do
   defp handle_unknown_field(path, %{unknown_field: :error}),
     do: {:error, {:unknown_field, Enum.join(List.wrap(path), ".")}}
 
-  defp handle_unknown_field(path, %{unknown_field: :warn}) do
-    {:ignore, %{type: :unknown_field, path: Enum.join(List.wrap(path), ".")}}
-  end
+  defp handle_unknown_field(path, %{unknown_field: :warn}),
+    do: {:ignore, %{type: :unknown_field, path: Enum.join(List.wrap(path), ".")}}
 
   defp handle_unknown_field(_path, _), do: :ignore
 
-  defp cast_value({:array, inner}, :contains_all, list) when is_list(list) do
-    cast_list(inner, list)
-  end
+  defp cast_value({:array, inner}, :contains_all, list) when is_list(list),
+    do: cast_list(inner, list)
 
-  defp cast_value(type, :contains_all, list) when is_list(list) do
-    cast_list(type, list)
-  end
+  defp cast_value(type, :contains_all, list) when is_list(list),
+    do: cast_list(type, list)
 
   defp cast_value(type, :in, list) when is_list(list), do: cast_list(type, list)
   defp cast_value(type, :nin, list) when is_list(list), do: cast_list(type, list)
@@ -853,9 +969,7 @@ defmodule Sifter.Ecto.Builder do
   defp cast_value(_type, op, v) when op in [:starts_with, :ends_with] and is_binary(v),
     do: {:ok, v}
 
-  defp cast_value(type, op, v) do
-    cast_value_with_dateonly(type, op, v)
-  end
+  defp cast_value(type, op, v), do: cast_value_with_dateonly(type, op, v)
 
   defp cast_value_with_dateonly(type, op, v) do
     case {type, v} do
@@ -914,11 +1028,10 @@ defmodule Sifter.Ecto.Builder do
       {module, function, args} ->
         Kernel.apply(module, function, [term | args])
 
-      sanitizer_fun when is_function(sanitizer_fun, 1) ->
-        sanitizer_fun.(term)
+      fun when is_function(fun, 1) ->
+        fun.(term)
 
       nil ->
-        # Use default sanitizer based on tsquery mode
         case options.tsquery_mode do
           :plainto -> Sifter.FullText.Sanitizers.Basic.sanitize_plainto(term)
           :raw -> Sifter.FullText.Sanitizers.Strict.sanitize_tsquery(term)

@@ -612,7 +612,7 @@ defmodule Sifter.BuilderTest do
       assert sql =~ "@>"
     end
 
-    test "ALL with assoc field (GROUP BY / HAVING semantics)" do
+    test "ALL with assoc field" do
       backend_tag = insert_tag(%{name: "backend"})
       urgent_tag = insert_tag(%{name: "urgent"})
       frontend_tag = insert_tag(%{name: "frontend"})
@@ -639,12 +639,6 @@ defmodule Sifter.BuilderTest do
       assert ids == Enum.sort([e1.id, e3.id])
 
       assert meta.warnings == []
-
-      {sql, _params} = to_sql!(q)
-      assert sql =~ "JOIN"
-      assert sql =~ "GROUP BY"
-      assert sql =~ "HAVING"
-      assert sql =~ "count"
     end
 
     test "ALL with single value (edge case)" do
@@ -660,6 +654,22 @@ defmodule Sifter.BuilderTest do
 
       assert [warning] = meta.warnings
       assert warning.type == :degraded_contains_all
+    end
+
+    test "ALL with aliased field mapping" do
+      e1 = insert_event(%{labels: ["backend", "urgent", "prod"]})
+      _e2 = insert_event(%{labels: ["frontend", "urgent"]})
+
+      ast = parse!("label ALL ('backend', 'urgent')")
+      allowed_fields = [%{as: "label", field: "labels"}]
+
+      assert {:ok, q, meta} =
+               Builder.apply(Event, ast, schema: Event, allowed_fields: allowed_fields)
+
+      rows = Repo.all(q)
+
+      assert rows == [e1]
+      assert meta.uses_full_text? == false
     end
   end
 

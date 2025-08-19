@@ -81,6 +81,7 @@ defmodule Sifter.Fixtures do
   def setup_sample_events do
     beatz = insert_organization(%{name: "Beatz"})
     donutz = insert_organization(%{name: "Donutz"})
+    dilla = insert_organization(%{name: "Dilla"})
 
     music_tag = insert_tag(%{name: "music"})
     workshop_tag = insert_tag(%{name: "workshop"})
@@ -134,9 +135,19 @@ defmodule Sifter.Fixtures do
       })
       |> associate_event_with_tags([live_tag, music_tag, family_tag])
 
+    e5 =
+      insert_event(%{
+        name: "The Jay Dilla Show",
+        description: "workinonit",
+        status: "live",
+        organization_id: dilla.id,
+        time_start: DateTime.add(now, -2 * 24 * 3600, :second),
+        time_end: DateTime.add(now, 6 * 24 * 3600, :second)
+      })
+
     %{
       orgs: %{beatz: beatz, donutz: donutz},
-      events: %{e1: e1, e2: e2, e3: e3, e4: e4},
+      events: %{e1: e1, e2: e2, e3: e3, e4: e4, e5: e5},
       tags: %{
         music: music_tag,
         workshop: workshop_tag,
